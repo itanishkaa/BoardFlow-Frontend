@@ -18,7 +18,7 @@ interface CanvasState {
   elements: CanvasElement[];
   remoteDrawingPreviews: Record<string, CanvasElement>;
   remoteCursors: Record<string, RemoteCursor>;
-  remoteTypingIndicators: Record<string, TypingIndicator>; // ✨ Track collaborator workflows
+  remoteTypingIndicators: Record<string, TypingIndicator>;
   camera: Camera;
   currentTool: ElementType | "select";
   socket: Socket | null;
@@ -51,7 +51,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   elements: [],
   remoteDrawingPreviews: {},
   remoteCursors: {},
-  remoteTypingIndicators: {}, // ✨ Initialize empty indicators object map
+  remoteTypingIndicators: {},
   camera: { x: 0, y: 0, zoom: 1 },
   currentTool: "select",
   socket: null,
@@ -119,7 +119,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       });
     });
 
-    // ✨ INTERCEPT REALTIME COLLABORATIVE TYPING EVENTS DOWN FROM NESTJS
     socketInstance.on("TYPING_STATUS_REMOTE", (data: { userId: string; worldX: number; worldY: number; isTyping: boolean; text: string }) => {
       set((state) => {
         const updatedIndicators = { ...state.remoteTypingIndicators };
@@ -181,13 +180,11 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   updateCamera: (cameraPartial) =>
     set((state) => ({ camera: { ...state.camera, ...cameraPartial } })),
 
-  // Local user creates a shape -> save locally AND emit to backend pipeline safely
   addElement: (element) => {
     set((state) => ({ elements: [...state.elements, element] }));
 
     const { socket, boardId } = get();
     if (socket) {
-      // 💥 FIXED: Consolidated duplicate hooks and removed 'currentBoardId' compilation reference
       socket.emit("ELEMENT_CREATE", { 
         boardId, 
         element: {
@@ -226,7 +223,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       const updatedElements = state.elements.map((el) => {
         if (el.id !== id) return el;
 
-        // 💥 FIXED: Translate individual points arrays for freehand vectors when shifted
         if (el.type === "freehand" && (el as any).points) {
           const shiftedPoints = (el as any).points.map((p: any) => ({
             x: p.x + dx,

@@ -4,7 +4,6 @@ export const getElementAtPosition = (
   elements: CanvasElement[],
   point: Point
 ): CanvasElement | null => {
-  // Loop backwards to select the topmost elements first (Z-index simulation)
   for (let i = elements.length - 1; i >= 0; i--) {
     const el = elements[i];
     
@@ -23,7 +22,6 @@ export const getElementAtPosition = (
       const centerX = el.x + radiusX;
       const centerY = el.y + radiusY;
       
-      // Normalized elliptical distance formula calculation
       const normalizedX = Math.pow(point.x - centerX, 2) / Math.pow(radiusX, 2);
       const normalizedY = Math.pow(point.y - centerY, 2) / Math.pow(radiusY, 2);
       
@@ -31,7 +29,6 @@ export const getElementAtPosition = (
         return el;
       }
     } else if (el.type === "arrow") {
-      // Simple line distance tracking (tolerance within 6 pixels)
       const targetX = el.x + el.width;
       const targetY = el.y + el.height;
       

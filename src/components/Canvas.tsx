@@ -9,7 +9,7 @@ export const Canvas: React.FC = () => {
   const {
     remoteCursors,
     remoteDrawingPreviews,
-    remoteTypingIndicators, // 🔥 Bound from the new Zustand store structure
+    remoteTypingIndicators,
     updateCursorPosition,
     updateDrawingPreview,
     leaveCanvasWorkspace,
@@ -25,7 +25,7 @@ export const Canvas: React.FC = () => {
     setSelectedElementId,
     updateElementPosition,
     deleteElement,
-    boardId, // 🔥 Extract real boardId dynamically 
+    boardId, 
     socket,
   } = useCanvasStore();
 
@@ -43,7 +43,7 @@ export const Canvas: React.FC = () => {
     y: number;
     worldX: number;
     worldY: number;
-    isEditingExisting: boolean; // 🛠️ Fixed typo structure
+    isEditingExisting: boolean;
     initialText?: string;
   } | null>(null);
 
@@ -129,7 +129,6 @@ export const Canvas: React.FC = () => {
           context.fillText(line, el.x, el.y + index * lineHeight);
         });
       } 
-      // 🔥 1. ADDED: SMOOTH FREEHAND PATH RENDERING ENGINE
       else if (el.type === "freehand" && (el as any).points) {
         const points = (el as any).points as Point[];
         if (points.length < 2) return;
@@ -164,7 +163,6 @@ export const Canvas: React.FC = () => {
         ctx.restore();
       });
 
-      // 🔥 2. ADDED: REAL-TIME COLLABORATIVE TYPING INDICATORS OVERLAY RENDERING
       Object.entries(remoteTypingIndicators).forEach(([userId, indicator]) => {
         const { width, height, lines } = getTextBoxSize(indicator.text);
 
@@ -327,7 +325,6 @@ export const Canvas: React.FC = () => {
       setIsDrawing(true);
       startDrawingPoint.current = worldPoint;
       
-      // 🔥 3. ADDED: INITIALIZE THE FREEHAND PATH ARRAY SCHEMATICS ON CLICK
       if (currentTool === "freehand") {
         const nextPreviewElement = {
           id: "preview",
@@ -361,7 +358,6 @@ export const Canvas: React.FC = () => {
     } else if (isDrawing && currentTool !== "select") {
       const currentWorldPoint = getEventWorldPoint(e);
 
-      // 🔥 4. ADDED: TRACK FREEHAND PATHS BY APPENDING COORDINATES INTERNALLY
       if (currentTool === "freehand" && previewElement && previewElement.type === "freehand") {
         const updatedPoints = [...((previewElement as any).points || []), currentWorldPoint];
         const xs = updatedPoints.map((p) => p.x);
@@ -521,7 +517,6 @@ export const Canvas: React.FC = () => {
           }}
           onPointerDown={(e) => e.stopPropagation()}
           onMouseDown={(e) => e.stopPropagation()}
-          // 🔥 5. ADDED: LIVE BROADCAST OF STRING VALUES TO COLLABORATORS ON KEYSTROKE
           onChange={(e) => {
             const text = e.target.value;
             if (socket) {
@@ -537,7 +532,6 @@ export const Canvas: React.FC = () => {
           onBlur={(e) => {
             const val = e.target.value.trim();
 
-            // 🔥 6. FIXED: Cleaned up hardcoded boardId configurations
             if (socket) {
               socket.emit("TYPING_STATUS", { boardId, worldX: 0, worldY: 0, isTyping: false, text: "" });
             }

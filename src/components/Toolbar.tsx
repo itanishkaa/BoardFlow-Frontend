@@ -27,7 +27,6 @@ export const Toolbar: React.FC = () => {
 
   const colorInputRef = useRef<HTMLInputElement | null>(null);
 
-  // 🗑️ SMART TRASH LOGIC RESTORED: Deletes one if selected, otherwise clears board
   const handleTrashClick = () => {
     if (selectedElementId) {
       deleteElement(selectedElementId);
@@ -64,7 +63,6 @@ export const Toolbar: React.FC = () => {
         border: "1px solid #3e3e3e",
       }}
     >
-      {/* TOOL SELECTORS */}
       <div style={{ display: "flex", gap: "4px" }}>
         {tools.map((tool) => {
           const isActive = currentTool === tool.id;
@@ -94,7 +92,6 @@ export const Toolbar: React.FC = () => {
 
       <div style={{ width: "1px", height: "20px", background: "#3e3e3e" }} />
 
-      {/* SOLID COLOR PICKER */}
       <div style={{ display: "flex", alignItems: "center", position: "relative", flexShrink: 0 }}>
         <button
           onClick={() => colorInputRef.current?.click()}
@@ -143,7 +140,6 @@ export const Toolbar: React.FC = () => {
 
       <div style={{ width: "1px", height: "20px", background: "#3e3e3e" }} />
 
-      {/* LINE WEIGHT SELECTOR */}
       <select
         value={Number(currentStrokeWidth) || 2}
         onChange={(e) => setStrokeWidth(Number(e.target.value))}
@@ -165,7 +161,6 @@ export const Toolbar: React.FC = () => {
 
       <div style={{ width: "1px", height: "20px", background: "#3e3e3e" }} />
 
-      {/* SMART TRASH ACTION BUTTON */}
       <button
         onClick={handleTrashClick}
         title={selectedElementId ? "Delete Selected Element" : "Clear Entire Canvas Workspace"}
