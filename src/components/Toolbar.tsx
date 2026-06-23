@@ -8,6 +8,7 @@ import {
   Trash2,
   Palette,
   Type,
+  Pen,
 } from "lucide-react";
 import type { ElementType } from "../types";
 
@@ -19,16 +20,20 @@ export const Toolbar: React.FC = () => {
     deleteElement,
     currentStrokeColor,
     setStrokeColor,
+    currentStrokeWidth,
+    setStrokeWidth,
     selectedElementId,
-  } = useCanvasStore();
+  } = useCanvasStore() as any;
 
+  const colorInputRef = useRef<HTMLInputElement | null>(null);
+
+  // 🗑️ SMART TRASH LOGIC RESTORED: Deletes one if selected, otherwise clears board
   const handleTrashClick = () => {
     if (selectedElementId) {
       deleteElement(selectedElementId);
-      return;
+    } else {
+      clearCanvas();
     }
-
-    clearCanvas();
   };
 
   const tools = [
@@ -36,81 +41,93 @@ export const Toolbar: React.FC = () => {
     { id: "rectangle", label: "Rectangle Shape", icon: <Square size={18} /> },
     { id: "circle", label: "Circle Shape", icon: <Circle size={18} /> },
     { id: "arrow", label: "Arrow Flow", icon: <ArrowRight size={18} /> },
-    { id: 'text', label: 'Text Annotation', icon: <Type size={18} /> },
+    { id: "text", label: "Text Annotation", icon: <Type size={18} /> },
+    { id: "freehand", label: "Pen Tool", icon: <Pen size={18} /> },
   ];
 
-  const colorInputRef = useRef<HTMLInputElement | null>(null);
-
   return (
-    <div className="toolbar">
-      {tools.map((tool) => {
-        const isActive = currentTool === tool.id;
-        return (
-          <button
-            key={tool.id}
-            onClick={() => setTool(tool.id as ElementType | "select")}
-            title={tool.label}
-            className={`toolbar-button ${isActive ? "is-active" : ""}`}
-          >
-            {tool.icon}
-          </button>
-        );
-      })}
+    <div 
+      className="toolbar" 
+      style={{
+        position: "absolute",
+        top: "20px",
+        left: "50%",
+        transform: "translateX(-50%)",
+        background: "#2a2a2a",
+        padding: "8px 16px",
+        borderRadius: "12px",
+        boxShadow: "0 4px 20px rgba(0,0,0,0.4)",
+        display: "flex",
+        gap: "12px",
+        alignItems: "center",
+        zIndex: 10000,
+        border: "1px solid #3e3e3e",
+      }}
+    >
+      {/* TOOL SELECTORS */}
+      <div style={{ display: "flex", gap: "4px" }}>
+        {tools.map((tool) => {
+          const isActive = currentTool === tool.id;
+          return (
+            <button
+              key={tool.id}
+              onClick={() => setTool(tool.id as ElementType | "select")}
+              title={tool.label}
+              style={{
+                background: isActive ? "#6366f1" : "transparent",
+                color: "#fff",
+                border: "none",
+                padding: "8px",
+                borderRadius: "6px",
+                cursor: "pointer",
+                transition: "background 0.2s",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              {tool.icon}
+            </button>
+          );
+        })}
+      </div>
 
-      <div
-        style={{
-          width: "1px",
-          height: "20px",
-          background: "#3e3e3e",
-          margin: "0 4px",
-        }}
-      />
+      <div style={{ width: "1px", height: "20px", background: "#3e3e3e" }} />
 
-      {/* Render soft preset color dots */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          position: "relative",
-          padding: "0 4px",
-          flexShrink: 0,
-        }}
-      >
+      {/* SOLID COLOR PICKER */}
+      <div style={{ display: "flex", alignItems: "center", position: "relative", flexShrink: 0 }}>
         <button
           onClick={() => colorInputRef.current?.click()}
           title="Choose Line Color"
-          className="toolbar-button"
           style={{
             display: "flex",
             alignItems: "center",
-            gap: "6px",
+            gap: "8px",
             padding: "4px 8px",
-            background: "#2a2a2a",
+            background: "#1e1e1e",
             borderRadius: "6px",
-            border: "1px solid #3e3e3e",
-            height: "32px", // Standardizes height across your button layouts
-            minWidth: "48px", // Guarantees a minimum width layout boundary
+            border: "1px solid #444",
+            height: "34px",
+            minWidth: "54px",
             cursor: "pointer",
           }}
         >
-          {/* Live Dynamic Color Indicator Ball */}
           <div
             style={{
               width: "14px",
               height: "14px",
               borderRadius: "50%",
-              backgroundColor: currentStrokeColor,
+              backgroundColor: currentStrokeColor || "#ffffff",
               border: "1px solid rgba(255,255,255,0.2)",
             }}
           />
           <Palette size={14} style={{ color: "#9ca3af" }} />
         </button>
 
-        {/* Hidden Native Input Field Trigger */}
         <input
           ref={colorInputRef}
           type="color"
-          value={currentStrokeColor}
+          value={currentStrokeColor || "#ffffff"}
           onChange={(e) => setStrokeColor(e.target.value)}
           style={{
             position: "absolute",
@@ -124,22 +141,47 @@ export const Toolbar: React.FC = () => {
         />
       </div>
 
-      {/* Visual Divider separator */}
-      <div
-        style={{
-          width: "1px",
-          height: "24px",
-          background: "#3e3e3e",
-          margin: "0 4px",
-        }}
-      />
+      <div style={{ width: "1px", height: "20px", background: "#3e3e3e" }} />
 
-      {/* Global Flush Utility Trigger */}
+      {/* LINE WEIGHT SELECTOR */}
+      <select
+        value={Number(currentStrokeWidth) || 2}
+        onChange={(e) => setStrokeWidth(Number(e.target.value))}
+        style={{
+          background: "#1e1e1e",
+          color: "#fff",
+          border: "1px solid #444",
+          padding: "6px 8px",
+          borderRadius: "6px",
+          outline: "none",
+          cursor: "pointer",
+          height: "34px",
+        }}
+      >
+        <option value={2}>Thin Line (2px)</option>
+        <option value={4}>Medium Line (4px)</option>
+        <option value={8}>Thick Line (8px)</option>
+      </select>
+
+      <div style={{ width: "1px", height: "20px", background: "#3e3e3e" }} />
+
+      {/* SMART TRASH ACTION BUTTON */}
       <button
         onClick={handleTrashClick}
-        title="Clear Canvas Workspace"
-        className="toolbar-button"
-        style={{ color: "#ef4444" }} // Elegant modern minimalist red hue accent
+        title={selectedElementId ? "Delete Selected Element" : "Clear Entire Canvas Workspace"}
+        style={{
+          background: "transparent",
+          color: "#ef4444",
+          border: selectedElementId ? "1px solid #ef4444" : "none",
+          backgroundColor: selectedElementId ? "rgba(239, 68, 68, 0.1)" : "transparent",
+          padding: "8px",
+          borderRadius: "6px",
+          cursor: "pointer",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          transition: "all 0.2s",
+        }}
       >
         <Trash2 size={18} />
       </button>

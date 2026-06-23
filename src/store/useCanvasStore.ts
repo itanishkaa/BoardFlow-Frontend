@@ -8,14 +8,23 @@ export interface RemoteCursor {
   y: number;
 }
 
+export interface TypingIndicator {
+  worldX: number;
+  worldY: number;
+  text: string;
+}
+
 interface CanvasState {
   elements: CanvasElement[];
   remoteDrawingPreviews: Record<string, CanvasElement>;
+  remoteCursors: Record<string, RemoteCursor>;
+  remoteTypingIndicators: Record<string, TypingIndicator>; // ✨ Track collaborator workflows
   camera: Camera;
   currentTool: ElementType | "select";
   socket: Socket | null;
   boardId: string;
   currentStrokeColor: string;
+  currentStrokeWidth: number;
   currentFillColor: string | null;
   selectedElementId: string | null;
 
@@ -32,25 +41,26 @@ interface CanvasState {
   updateDrawingPreview: (element: CanvasElement | null) => void;
   updateCursorPosition: (x: number, y: number) => void;
   setStrokeColor: (color: string) => void;
+  setStrokeWidth: (width: number) => void;
   setFillColor: (color: string | null) => void;
   setSelectedElementId: (id: string | null) => void;
   updateElementPosition: (id: string, dx: number, dy: number) => void;
-  remoteCursors: Record<string, RemoteCursor>;
 }
 
 export const useCanvasStore = create<CanvasState>((set, get) => ({
   elements: [],
   remoteDrawingPreviews: {},
   remoteCursors: {},
+  remoteTypingIndicators: {}, // ✨ Initialize empty indicators object map
   camera: { x: 0, y: 0, zoom: 1 },
   currentTool: "select",
   socket: null,
   boardId: "",
-  currentStrokeColor: "#ffffff", // Clean white lines default
+  currentStrokeColor: "#ffffff",
+  currentStrokeWidth: 2,
   currentFillColor: null,
   selectedElementId: null,
 
-  // Initialize Socket connection and bind remote event listeners
   disconnectSocket: () => {
     const { socket } = get();
     if (socket) {
@@ -79,52 +89,48 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   },
 
   initSocket: (boardId: string) => {
-    // If a socket connection is already running, avoid duplicating handshakes
     if (get().socket) return;
 
-    // Connect specifically to the Socket.io Gateway running on Port 3000
     const socketInstance = io("http://localhost:3000");
 
     socketInstance.on("connect", () => {
-      console.log(
-        "⚡ Connected to BoardFlow Realtime Engine:",
-        socketInstance.id,
-      );
+      console.log("⚡ Connected to BoardFlow Realtime Engine:", socketInstance.id);
       socketInstance.emit("JOIN_BOARD", { boardId });
     });
 
-    // Capture and load initial historical elements out of the database data arrays
-    socketInstance.on(
-      "LOAD_BOARD_ELEMENTS",
-      (historicalElements: CanvasElement[]) => {
-        set({ elements: historicalElements });
-        console.log(
-          `📦 Loaded ${historicalElements.length} persistent elements from database storage.`,
-        );
-      },
-    );
+    socketInstance.on("LOAD_BOARD_ELEMENTS", (historicalElements: CanvasElement[]) => {
+      set({ elements: historicalElements });
+      console.log(`📦 Loaded ${historicalElements.length} persistent elements from DB.`);
+    });
 
-    socketInstance.on(
-      "ELEMENT_CREATED_REMOTE",
-      (remoteElement: CanvasElement) => {
-        get().addRemoteElement(remoteElement);
-      },
-    );
+    socketInstance.on("ELEMENT_CREATED_REMOTE", (remoteElement: CanvasElement) => {
+      get().addRemoteElement(remoteElement);
+    });
 
-    socketInstance.on(
-      "DRAWING_PREVIEW_REMOTE",
-      (data: { userId: string; element: CanvasElement | null }) => {
-        set((state) => {
-          const updatedPreviews = { ...state.remoteDrawingPreviews };
-          if (data.element) {
-            updatedPreviews[data.userId] = data.element;
-          } else {
-            delete updatedPreviews[data.userId];
-          }
-          return { remoteDrawingPreviews: updatedPreviews };
-        });
-      },
-    );
+    socketInstance.on("DRAWING_PREVIEW_REMOTE", (data: { userId: string; element: CanvasElement | null }) => {
+      set((state) => {
+        const updatedPreviews = { ...state.remoteDrawingPreviews };
+        if (data.element) {
+          updatedPreviews[data.userId] = data.element;
+        } else {
+          delete updatedPreviews[data.userId];
+        }
+        return { remoteDrawingPreviews: updatedPreviews };
+      });
+    });
+
+    // ✨ INTERCEPT REALTIME COLLABORATIVE TYPING EVENTS DOWN FROM NESTJS
+    socketInstance.on("TYPING_STATUS_REMOTE", (data: { userId: string; worldX: number; worldY: number; isTyping: boolean; text: string }) => {
+      set((state) => {
+        const updatedIndicators = { ...state.remoteTypingIndicators };
+        if (!data.isTyping) {
+          delete updatedIndicators[data.userId];
+        } else {
+          updatedIndicators[data.userId] = { worldX: data.worldX, worldY: data.worldY, text: data.text };
+        }
+        return { remoteTypingIndicators: updatedIndicators };
+      });
+    });
 
     socketInstance.on("BOARD_CLEARED_REMOTE", () => {
       get().clearRemoteCanvas();
@@ -140,34 +146,30 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       set((state) => {
         const updatedCursors = { ...state.remoteCursors };
         const updatedPreviews = { ...state.remoteDrawingPreviews };
+        const updatedTyping = { ...state.remoteTypingIndicators };
         delete updatedCursors[data.userId];
         delete updatedPreviews[data.userId];
+        delete updatedTyping[data.userId];
         return {
           remoteCursors: updatedCursors,
           remoteDrawingPreviews: updatedPreviews,
+          remoteTypingIndicators: updatedTyping
         };
       });
     });
 
-    socketInstance.on(
-      "ELEMENT_UPDATED_REMOTE",
-      (updatedElement: CanvasElement) => {
-        set((state) => ({
-          elements: state.elements.map((el) =>
-            el.id === updatedElement.id ? updatedElement : el,
-          ),
-        }));
-      },
-    );
+    socketInstance.on("ELEMENT_UPDATED_REMOTE", (updatedElement: CanvasElement) => {
+      set((state) => ({
+        elements: state.elements.map((el) =>
+          el.id === updatedElement.id ? updatedElement : el,
+        ),
+      }));
+    });
 
     socketInstance.on("ELEMENT_DELETED_REMOTE", (deletedId: string) => {
       set((state) => ({
         elements: state.elements.filter((el) => el.id !== deletedId),
-        // Clear selection if the deleted element was the one we had selected
-        selectedElementId:
-          state.selectedElementId === deletedId
-            ? null
-            : state.selectedElementId,
+        selectedElementId: state.selectedElementId === deletedId ? null : state.selectedElementId,
       }));
     });
 
@@ -179,18 +181,23 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   updateCamera: (cameraPartial) =>
     set((state) => ({ camera: { ...state.camera, ...cameraPartial } })),
 
-  // Local user creates a shape -> save locally AND emit to backend pipeline
+  // Local user creates a shape -> save locally AND emit to backend pipeline safely
   addElement: (element) => {
     set((state) => ({ elements: [...state.elements, element] }));
 
     const { socket, boardId } = get();
     if (socket) {
-      // Stream the action down to our NestJS gateway broker
-      socket.emit("ELEMENT_CREATE", { boardId, element });
+      // 💥 FIXED: Consolidated duplicate hooks and removed 'currentBoardId' compilation reference
+      socket.emit("ELEMENT_CREATE", { 
+        boardId, 
+        element: {
+          ...element,
+          points: element.type === 'freehand' ? (element as any).points : undefined
+        }
+      });
     }
   },
 
-  // Remote updates -> inject into our rendering array without re-emitting
   addRemoteElement: (element) => {
     set((state) => ({ elements: [...state.elements, element] }));
   },
@@ -210,9 +217,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   },
 
   setStrokeColor: (color: string) => set({ currentStrokeColor: color }),
-
+  setStrokeWidth: (width: number) => set({ currentStrokeWidth: width }),
   setFillColor: (color: string | null) => set({ currentFillColor: color }),
-
   setSelectedElementId: (id) => set({ selectedElementId: id }),
 
   updateElementPosition: (id, dx, dy) => {
@@ -220,18 +226,21 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       const updatedElements = state.elements.map((el) => {
         if (el.id !== id) return el;
 
-        // Shift coordinate spaces by delta changes
-        if (el.type === "arrow") {
-          return { ...el, x: el.x + dx, y: el.y + dy };
-        } else {
-          return { ...el, x: el.x + dx, y: el.y + dy };
+        // 💥 FIXED: Translate individual points arrays for freehand vectors when shifted
+        if (el.type === "freehand" && (el as any).points) {
+          const shiftedPoints = (el as any).points.map((p: any) => ({
+            x: p.x + dx,
+            y: p.y + dy,
+          }));
+          return { ...el, x: el.x + dx, y: el.y + dy, points: shiftedPoints };
         }
+
+        return { ...el, x: el.x + dx, y: el.y + dy };
       });
 
       const targetElement = updatedElements.find((el) => el.id === id);
       const { socket, boardId } = get();
       if (socket && targetElement) {
-        // Broadcast movement deltas over WebSockets
         socket.emit("ELEMENT_UPDATE", { boardId, element: targetElement });
       }
 
@@ -242,13 +251,11 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   deleteElement: (id) => {
     set((state) => ({
       elements: state.elements.filter((el) => el.id !== id),
-      selectedElementId:
-        state.selectedElementId === id ? null : state.selectedElementId,
+      selectedElementId: state.selectedElementId === id ? null : state.selectedElementId,
     }));
 
     const { socket, boardId } = get();
     if (socket) {
-      // Notify backend pipeline to remove it from database & other clients
       socket.emit("ELEMENT_DELETE", { boardId, elementId: id });
     }
   },
