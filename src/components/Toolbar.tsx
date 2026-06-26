@@ -7,8 +7,12 @@ import {
   ArrowRight,
   Trash2,
   Palette,
+  PaintBucket,
   Type,
   Pen,
+  Redo2,
+  Undo2,
+  X,
 } from "lucide-react";
 import type { ElementType } from "../types";
 
@@ -20,12 +24,57 @@ export const Toolbar: React.FC = () => {
     deleteElement,
     currentStrokeColor,
     setStrokeColor,
+    currentFillColor,
+    setFillColor,
     currentStrokeWidth,
     setStrokeWidth,
     selectedElementId,
+    elements,
+    updateElementStyle,
+    undo,
+    redo,
+    historyStack,
+    futureStack,
   } = useCanvasStore() as any;
 
-  const colorInputRef = useRef<HTMLInputElement | null>(null);
+  const strokeInputRef = useRef<HTMLInputElement | null>(null);
+  const fillInputRef = useRef<HTMLInputElement | null>(null);
+  const selectedElement = elements.find((element: any) => element.id === selectedElementId);
+  const canUndo = historyStack.length > 0;
+  const canRedo = futureStack.length > 0;
+  const canFillShape =
+    selectedElement?.type === "rectangle" ||
+    selectedElement?.type === "circle" ||
+    selectedElement?.type === "freehand" ||
+    currentTool === "fill" ||
+    currentTool === "rectangle" ||
+    currentTool === "circle";
+
+  const applyStrokeColor = (color: string) => {
+    setStrokeColor(color);
+    if (selectedElementId) {
+      updateElementStyle(selectedElementId, { strokeColor: color });
+    }
+  };
+
+  const applyStrokeWidth = (width: number) => {
+    setStrokeWidth(width);
+    if (selectedElementId) {
+      updateElementStyle(selectedElementId, { strokeWidth: width });
+    }
+  };
+
+  const applyFillColor = (color: string | null) => {
+    setFillColor(color);
+    if (
+      selectedElementId &&
+      (selectedElement?.type === "rectangle" ||
+        selectedElement?.type === "circle" ||
+        selectedElement?.type === "freehand")
+    ) {
+      updateElementStyle(selectedElementId, { fillColor: color });
+    }
+  };
 
   const handleTrashClick = () => {
     if (selectedElementId) {
@@ -40,6 +89,7 @@ export const Toolbar: React.FC = () => {
     { id: "rectangle", label: "Rectangle Shape", icon: <Square size={18} /> },
     { id: "circle", label: "Circle Shape", icon: <Circle size={18} /> },
     { id: "arrow", label: "Arrow Flow", icon: <ArrowRight size={18} /> },
+    { id: "fill", label: "Fill Shape", icon: <PaintBucket size={18} /> },
     { id: "text", label: "Text Annotation", icon: <Type size={18} /> },
     { id: "freehand", label: "Pen Tool", icon: <Pen size={18} /> },
   ];
@@ -69,7 +119,7 @@ export const Toolbar: React.FC = () => {
           return (
             <button
               key={tool.id}
-              onClick={() => setTool(tool.id as ElementType | "select")}
+              onClick={() => setTool(tool.id as ElementType | "select" | "fill")}
               title={tool.label}
               style={{
                 background: isActive ? "#6366f1" : "transparent",
@@ -92,9 +142,52 @@ export const Toolbar: React.FC = () => {
 
       <div style={{ width: "1px", height: "20px", background: "#3e3e3e" }} />
 
+      <div style={{ display: "flex", gap: "4px" }}>
+        <button
+          onClick={undo}
+          title="Undo"
+          disabled={!canUndo}
+          style={{
+            background: "transparent",
+            color: "#fff",
+            border: "none",
+            padding: "8px",
+            borderRadius: "6px",
+            cursor: canUndo ? "pointer" : "not-allowed",
+            opacity: canUndo ? 1 : 0.35,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Undo2 size={18} />
+        </button>
+        <button
+          onClick={redo}
+          title="Redo"
+          disabled={!canRedo}
+          style={{
+            background: "transparent",
+            color: "#fff",
+            border: "none",
+            padding: "8px",
+            borderRadius: "6px",
+            cursor: canRedo ? "pointer" : "not-allowed",
+            opacity: canRedo ? 1 : 0.35,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Redo2 size={18} />
+        </button>
+      </div>
+
+      <div style={{ width: "1px", height: "20px", background: "#3e3e3e" }} />
+
       <div style={{ display: "flex", alignItems: "center", position: "relative", flexShrink: 0 }}>
         <button
-          onClick={() => colorInputRef.current?.click()}
+          onClick={() => strokeInputRef.current?.click()}
           title="Choose Line Color"
           style={{
             display: "flex",
@@ -122,10 +215,10 @@ export const Toolbar: React.FC = () => {
         </button>
 
         <input
-          ref={colorInputRef}
+          ref={strokeInputRef}
           type="color"
           value={currentStrokeColor || "#ffffff"}
-          onChange={(e) => setStrokeColor(e.target.value)}
+          onChange={(e) => applyStrokeColor(e.target.value)}
           style={{
             position: "absolute",
             top: 0,
@@ -140,9 +233,79 @@ export const Toolbar: React.FC = () => {
 
       <div style={{ width: "1px", height: "20px", background: "#3e3e3e" }} />
 
+      <div style={{ display: "flex", alignItems: "center", gap: "4px", position: "relative", flexShrink: 0 }}>
+        <button
+          onClick={() => canFillShape && fillInputRef.current?.click()}
+          title="Choose Shape Fill Color"
+          disabled={!canFillShape}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+            padding: "4px 8px",
+            background: "#1e1e1e",
+            borderRadius: "6px",
+            border: "1px solid #444",
+            height: "34px",
+            minWidth: "54px",
+            cursor: canFillShape ? "pointer" : "not-allowed",
+            opacity: canFillShape ? 1 : 0.45,
+          }}
+        >
+          <div
+            style={{
+              width: "14px",
+              height: "14px",
+              borderRadius: "3px",
+              backgroundColor: currentFillColor || "transparent",
+              border: currentFillColor ? "1px solid rgba(255,255,255,0.2)" : "1px dashed #9ca3af",
+            }}
+          />
+          <Palette size={14} style={{ color: "#9ca3af" }} />
+        </button>
+
+        <input
+          ref={fillInputRef}
+          type="color"
+          value={currentFillColor || "#ffffff"}
+          onChange={(e) => applyFillColor(e.target.value)}
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            width: 0,
+            height: 0,
+            opacity: 0,
+            pointerEvents: "none",
+          }}
+        />
+
+        {currentFillColor && canFillShape && (
+          <button
+            onClick={() => applyFillColor(null)}
+            title="Remove Shape Fill"
+            style={{
+              background: "transparent",
+              color: "#9ca3af",
+              border: "none",
+              padding: "8px",
+              borderRadius: "6px",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <X size={16} />
+          </button>
+        )}
+      </div>
+
+      <div style={{ width: "1px", height: "20px", background: "#3e3e3e" }} />
+
       <select
         value={Number(currentStrokeWidth) || 2}
-        onChange={(e) => setStrokeWidth(Number(e.target.value))}
+        onChange={(e) => applyStrokeWidth(Number(e.target.value))}
         style={{
           background: "#1e1e1e",
           color: "#fff",

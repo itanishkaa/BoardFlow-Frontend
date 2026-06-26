@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useCanvasStore } from "../store/useCanvasStore";
 import type { Point, CanvasElement } from "../types";
 import { getElementAtPosition } from "../utils/geometry";
@@ -6,6 +6,7 @@ import { getElementAtPosition } from "../utils/geometry";
 export const Canvas: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const textAreaRef = useRef<HTMLTextAreaElement | null>(null);
+  const draggedElementId = useRef<string | null>(null);
   const {
     remoteCursors,
     remoteDrawingPreviews,
@@ -24,9 +25,11 @@ export const Canvas: React.FC = () => {
     selectedElementId,
     setSelectedElementId,
     updateElementPosition,
+    updateElementStyle,
     deleteElement,
-    boardId, 
+    boardId,
     socket,
+    syncElementPosition
   } = useCanvasStore();
 
   const [isPanning, setIsPanning] = useState(false);
@@ -34,9 +37,40 @@ export const Canvas: React.FC = () => {
 
   const startPanPoint = useRef<Point>({ x: 0, y: 0 });
   const startDrawingPoint = useRef<Point>({ x: 0, y: 0 });
-  const [previewElement, setPreviewElement] = useState<CanvasElement | null>(null);
+  const [previewElement, setPreviewElement] = useState<CanvasElement | null>(
+    null,
+  );
   const lastPointerPoint = useRef<Point>({ x: 0, y: 0 });
-  
+
+  const lastCursorSentAt = useRef(0);
+
+  const sendCursorUpdate = useCallback(
+    (x: number, y: number) => {
+      const now = Date.now();
+
+      if (now - lastCursorSentAt.current < 50) return;
+
+      lastCursorSentAt.current = now;
+      updateCursorPosition(x, y);
+    },
+    [updateCursorPosition],
+  );
+
+  const lastPreviewSentAt = useRef(0);
+
+  const sendPreviewUpdate = useCallback(
+    (element: CanvasElement | null) => {
+      const now = Date.now();
+
+      if (now - lastPreviewSentAt.current < 33) return;
+
+      lastPreviewSentAt.current = now;
+
+      updateDrawingPreview(element);
+    },
+    [updateDrawingPreview],
+  );
+
   const [textEditor, setTextEditor] = useState<{
     id: string;
     x: number;
@@ -55,7 +89,41 @@ export const Canvas: React.FC = () => {
     return () => clearTimeout(focusTimeout);
   }, [textEditor]);
 
-  const getEventWorldPoint = (e: React.PointerEvent | React.WheelEvent | React.MouseEvent): Point => {
+  const { undo, redo } = useCanvasStore() as any;
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Check if user is actively typing inside a text box editor to prevent breaking typing text
+      if (
+        document.activeElement?.tagName === "TEXTAREA" ||
+        document.activeElement?.tagName === "INPUT"
+      ) {
+        return;
+      }
+
+      const isMac = navigator.platform.toUpperCase().indexOf("MAC") >= 0;
+      const isModifierPressed = isMac ? e.metaKey : e.ctrlKey;
+
+      if (isModifierPressed && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        if (e.shiftKey) {
+          redo(); // Ctrl + Shift + Z
+        } else {
+          undo(); // Ctrl + Z
+        }
+      } else if (isModifierPressed && e.key.toLowerCase() === "y") {
+        e.preventDefault();
+        redo(); // Ctrl + Y
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [undo, redo]);
+
+  const getEventWorldPoint = (
+    e: React.PointerEvent | React.WheelEvent | React.MouseEvent,
+  ): Point => {
     return {
       x: (e.clientX - camera.x) / camera.zoom,
       y: (e.clientY - camera.y) / camera.zoom,
@@ -83,12 +151,18 @@ export const Canvas: React.FC = () => {
       render();
     };
 
-    const drawElement = (context: CanvasRenderingContext2D, el: CanvasElement) => {
+    const drawElement = (
+      context: CanvasRenderingContext2D,
+      el: CanvasElement,
+    ) => {
       context.strokeStyle = el.strokeColor;
       context.lineWidth = el.strokeWidth || 2;
-      context.fillStyle = el.strokeColor;
 
       if (el.type === "rectangle") {
+        if (el.fillColor) {
+          context.fillStyle = el.fillColor;
+          context.fillRect(el.x, el.y, el.width, el.height);
+        }
         context.strokeRect(el.x, el.y, el.width, el.height);
       } else if (el.type === "circle") {
         context.beginPath();
@@ -97,6 +171,10 @@ export const Canvas: React.FC = () => {
         const centerX = el.x + radiusX;
         const centerY = el.y + radiusY;
         context.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, 2 * Math.PI);
+        if (el.fillColor) {
+          context.fillStyle = el.fillColor;
+          context.fill();
+        }
         context.stroke();
       } else if (el.type === "arrow") {
         context.beginPath();
@@ -121,6 +199,7 @@ export const Canvas: React.FC = () => {
         );
         context.stroke();
       } else if (el.type === "text" && el.text) {
+        context.fillStyle = el.strokeColor;
         context.font = "16px Inter, sans-serif";
         context.textBaseline = "top";
         const lines = el.text.split("\n");
@@ -128,18 +207,30 @@ export const Canvas: React.FC = () => {
         lines.forEach((line, index) => {
           context.fillText(line, el.x, el.y + index * lineHeight);
         });
-      } 
-      else if (el.type === "freehand" && (el as any).points) {
+      } else if (el.type === "freehand" && (el as any).points) {
         const points = (el as any).points as Point[];
         if (points.length < 2) return;
         context.beginPath();
         context.moveTo(points[0].x, points[0].y);
+
+        if (el.fillColor && points.length >= 4) {
+          points.slice(1).forEach((point) => context.lineTo(point.x, point.y));
+          context.closePath();
+          context.fillStyle = el.fillColor;
+          context.fill();
+          context.beginPath();
+          context.moveTo(points[0].x, points[0].y);
+        }
+
         for (let i = 1; i < points.length - 1; i++) {
           const xc = (points[i].x + points[i + 1].x) / 2;
           const yc = (points[i].y + points[i + 1].y) / 2;
           context.quadraticCurveTo(points[i].x, points[i].y, xc, yc);
         }
-        context.lineTo(points[points.length - 1].x, points[points.length - 1].y);
+        context.lineTo(
+          points[points.length - 1].x,
+          points[points.length - 1].y,
+        );
         context.stroke();
       }
     };
@@ -180,12 +271,20 @@ export const Canvas: React.FC = () => {
         ctx.font = "16px Inter, sans-serif";
         ctx.textBaseline = "top";
         lines.forEach((line, index) => {
-          ctx.fillText(line || "Type something...", indicator.worldX + 6, indicator.worldY + 6 + index * 20);
+          ctx.fillText(
+            line || "Type something...",
+            indicator.worldX + 6,
+            indicator.worldY + 6 + index * 20,
+          );
         });
 
         ctx.fillStyle = "rgba(99, 102, 241, 0.85)";
         ctx.font = "12px Inter, sans-serif";
-        ctx.fillText(`Guest (${userId.slice(0, 4)}) editing`, indicator.worldX, indicator.worldY - 18);
+        ctx.fillText(
+          `Guest (${userId.slice(0, 4)}) editing`,
+          indicator.worldX,
+          indicator.worldY - 18,
+        );
         ctx.restore();
       });
 
@@ -235,11 +334,28 @@ export const Canvas: React.FC = () => {
           const offset = 4 / camera.zoom;
 
           if (selectedEl.type === "arrow") {
-            const minX = Math.min(selectedEl.x, selectedEl.x + selectedEl.width);
-            const minY = Math.min(selectedEl.y, selectedEl.y + selectedEl.height);
-            const maxX = Math.max(selectedEl.x, selectedEl.x + selectedEl.width);
-            const maxY = Math.max(selectedEl.y, selectedEl.y + selectedEl.height);
-            ctx.strokeRect(minX - offset, minY - offset, maxX - minX + offset * 2, maxY - minY + offset * 2);
+            const minX = Math.min(
+              selectedEl.x,
+              selectedEl.x + selectedEl.width,
+            );
+            const minY = Math.min(
+              selectedEl.y,
+              selectedEl.y + selectedEl.height,
+            );
+            const maxX = Math.max(
+              selectedEl.x,
+              selectedEl.x + selectedEl.width,
+            );
+            const maxY = Math.max(
+              selectedEl.y,
+              selectedEl.y + selectedEl.height,
+            );
+            ctx.strokeRect(
+              minX - offset,
+              minY - offset,
+              maxX - minX + offset * 2,
+              maxY - minY + offset * 2,
+            );
           } else {
             ctx.strokeRect(
               selectedEl.x - offset,
@@ -258,11 +374,21 @@ export const Canvas: React.FC = () => {
     resizeCanvas();
     window.addEventListener("resize", resizeCanvas);
     return () => window.removeEventListener("resize", resizeCanvas);
-  }, [elements, camera, previewElement, remoteCursors, remoteDrawingPreviews, remoteTypingIndicators]);
+  }, [
+    elements,
+    camera,
+    previewElement,
+    remoteCursors,
+    remoteDrawingPreviews,
+    remoteTypingIndicators,
+  ]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (document.activeElement?.tagName === "TEXTAREA" || document.activeElement?.tagName === "INPUT") {
+      if (
+        document.activeElement?.tagName === "TEXTAREA" ||
+        document.activeElement?.tagName === "INPUT"
+      ) {
         return;
       }
       if (selectedElementId && (e.key === "Delete" || e.key === "Backspace")) {
@@ -279,6 +405,21 @@ export const Canvas: React.FC = () => {
     if (e.button !== 0 && e.button !== 1) return;
     const worldPoint = getEventWorldPoint(e);
     lastPointerPoint.current = worldPoint;
+
+    if (currentTool === "fill") {
+      const clickedElement = getElementAtPosition(elements, worldPoint);
+      if (
+        clickedElement?.type === "rectangle" ||
+        clickedElement?.type === "circle" ||
+        clickedElement?.type === "freehand"
+      ) {
+        updateElementStyle(clickedElement.id, { fillColor: currentFillColor });
+        setSelectedElementId(clickedElement.id);
+      } else {
+        setSelectedElementId(null);
+      }
+      return;
+    }
 
     if (currentTool === "text") {
       setSelectedElementId(null);
@@ -314,17 +455,23 @@ export const Canvas: React.FC = () => {
         setSelectedElementId(null);
         e.currentTarget.setPointerCapture(e.pointerId);
         setIsPanning(true);
-        startPanPoint.current = { x: e.clientX - camera.x, y: e.clientY - camera.y };
+        startPanPoint.current = {
+          x: e.clientX - camera.x,
+          y: e.clientY - camera.y,
+        };
       }
     } else if (e.button === 1) {
       e.currentTarget.setPointerCapture(e.pointerId);
       setIsPanning(true);
-      startPanPoint.current = { x: e.clientX - camera.x, y: e.clientY - camera.y };
+      startPanPoint.current = {
+        x: e.clientX - camera.x,
+        y: e.clientY - camera.y,
+      };
     } else {
       e.currentTarget.setPointerCapture(e.pointerId);
       setIsDrawing(true);
       startDrawingPoint.current = worldPoint;
-      
+
       if (currentTool === "freehand") {
         const nextPreviewElement = {
           id: "preview",
@@ -344,22 +491,41 @@ export const Canvas: React.FC = () => {
 
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const worldPoint = getEventWorldPoint(e);
-    updateCursorPosition(worldPoint.x, worldPoint.y);
+    sendCursorUpdate(worldPoint.x, worldPoint.y);
 
-    if (currentTool === "text") return;
+    if (currentTool === "text" || currentTool === "fill") return;
 
-    if (currentTool === "select" && selectedElementId && e.currentTarget.hasPointerCapture(e.pointerId) && !isPanning) {
+    if (
+      currentTool === "select" &&
+      selectedElementId &&
+      e.currentTarget.hasPointerCapture(e.pointerId) &&
+      !isPanning
+    ) {
+      draggedElementId.current = selectedElementId;
+
       const dx = worldPoint.x - lastPointerPoint.current.x;
       const dy = worldPoint.y - lastPointerPoint.current.y;
+
       updateElementPosition(selectedElementId, dx, dy);
+
       lastPointerPoint.current = worldPoint;
     } else if (isPanning) {
-      updateCamera({ x: e.clientX - startPanPoint.current.x, y: e.clientY - startPanPoint.current.y });
+      updateCamera({
+        x: e.clientX - startPanPoint.current.x,
+        y: e.clientY - startPanPoint.current.y,
+      });
     } else if (isDrawing && currentTool !== "select") {
       const currentWorldPoint = getEventWorldPoint(e);
 
-      if (currentTool === "freehand" && previewElement && previewElement.type === "freehand") {
-        const updatedPoints = [...((previewElement as any).points || []), currentWorldPoint];
+      if (
+        currentTool === "freehand" &&
+        previewElement &&
+        previewElement.type === "freehand"
+      ) {
+        const updatedPoints = [
+          ...((previewElement as any).points || []),
+          currentWorldPoint,
+        ];
         const xs = updatedPoints.map((p) => p.x);
         const ys = updatedPoints.map((p) => p.y);
         const minX = Math.min(...xs);
@@ -376,9 +542,12 @@ export const Canvas: React.FC = () => {
           points: updatedPoints,
         };
         setPreviewElement(nextPreviewElement as any);
-        updateDrawingPreview(nextPreviewElement as any);
+        sendPreviewUpdate(nextPreviewElement as any);
       } else if (currentTool !== "freehand") {
-        let x = 0, y = 0, width = 0, height = 0;
+        let x = 0,
+          y = 0,
+          width = 0,
+          height = 0;
 
         if (currentTool === "arrow") {
           x = startDrawingPoint.current.x;
@@ -405,17 +574,25 @@ export const Canvas: React.FC = () => {
         };
 
         setPreviewElement(nextPreviewElement);
-        updateDrawingPreview(nextPreviewElement);
+        sendPreviewUpdate(nextPreviewElement);
       }
     }
   };
 
   const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (draggedElementId.current) {
+      if (draggedElementId.current) {
+        syncElementPosition(draggedElementId.current);
+        draggedElementId.current = null;
+      }
+
+      draggedElementId.current = null;
+    }
     if (e.currentTarget.hasPointerCapture(e.pointerId)) {
       e.currentTarget.releasePointerCapture(e.pointerId);
     }
 
-    if (currentTool === "text") return;
+    if (currentTool === "text" || currentTool === "fill") return;
 
     if (isPanning) {
       setIsPanning(false);
@@ -424,8 +601,10 @@ export const Canvas: React.FC = () => {
 
       if (previewElement) {
         const isFreehand = previewElement.type === "freehand";
-        const hasLength = Math.abs(previewElement.width) > 4 || Math.abs(previewElement.height) > 4;
-        
+        const hasLength =
+          Math.abs(previewElement.width) > 4 ||
+          Math.abs(previewElement.height) > 4;
+
         if (isFreehand || hasLength) {
           addElement({
             ...previewElement,
@@ -436,14 +615,15 @@ export const Canvas: React.FC = () => {
         }
       }
       setPreviewElement(null);
-      updateDrawingPreview(null);
+      sendPreviewUpdate(null);
     }
   };
 
   const handleWheel = (e: React.WheelEvent) => {
     e.preventDefault();
     const zoomFactor = 1.1;
-    let newZoom = e.deltaY < 0 ? camera.zoom * zoomFactor : camera.zoom / zoomFactor;
+    let newZoom =
+      e.deltaY < 0 ? camera.zoom * zoomFactor : camera.zoom / zoomFactor;
     newZoom = Math.max(0.25, Math.min(4, newZoom));
 
     const mouseWorldBeforeZoom = getEventWorldPoint(e);
@@ -455,7 +635,14 @@ export const Canvas: React.FC = () => {
   };
 
   return (
-    <div style={{ position: "relative", width: "100vw", height: "100vh", overflow: "hidden" }}>
+    <div
+      style={{
+        position: "relative",
+        width: "100vw",
+        height: "100vh",
+        overflow: "hidden",
+      }}
+    >
       <canvas
         ref={canvasRef}
         className="board-canvas"
@@ -463,7 +650,16 @@ export const Canvas: React.FC = () => {
           display: "block",
           width: "100%",
           height: "100%",
-          cursor: currentTool === "select" ? (isPanning ? "grabbing" : "grab") : currentTool === "text" ? "text" : "crosshair",
+          cursor:
+            currentTool === "select"
+              ? isPanning
+                ? "grabbing"
+                : "grab"
+              : currentTool === "text"
+                ? "text"
+                : currentTool === "fill"
+                  ? "copy"
+                  : "crosshair",
         }}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
@@ -533,17 +729,30 @@ export const Canvas: React.FC = () => {
             const val = e.target.value.trim();
 
             if (socket) {
-              socket.emit("TYPING_STATUS", { boardId, worldX: 0, worldY: 0, isTyping: false, text: "" });
+              socket.emit("TYPING_STATUS", {
+                boardId,
+                worldX: 0,
+                worldY: 0,
+                isTyping: false,
+                text: "",
+              });
             }
 
             if (val) {
               if (textEditor.isEditingExisting) {
-                useCanvasStore.getState().updateElementPosition(textEditor.id, 0, 0);
-                const updatedElement = elements.find((el) => el.id === textEditor.id);
+                useCanvasStore
+                  .getState()
+                  .updateElementPosition(textEditor.id, 0, 0);
+                const updatedElement = elements.find(
+                  (el) => el.id === textEditor.id,
+                );
                 if (updatedElement) {
                   const finalPayload = { ...updatedElement, text: val };
                   if (socket) {
-                    socket.emit("ELEMENT_UPDATE", { boardId, element: finalPayload });
+                    socket.emit("ELEMENT_UPDATE", {
+                      boardId,
+                      element: finalPayload,
+                    });
                   }
                 }
               } else {
@@ -573,7 +782,13 @@ export const Canvas: React.FC = () => {
             }
             if (e.key === "Escape") {
               if (socket) {
-                socket.emit("TYPING_STATUS", { boardId, worldX: 0, worldY: 0, isTyping: false, text: "" });
+                socket.emit("TYPING_STATUS", {
+                  boardId,
+                  worldX: 0,
+                  worldY: 0,
+                  isTyping: false,
+                  text: "",
+                });
               }
               setTextEditor(null);
             }
