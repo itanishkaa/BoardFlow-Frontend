@@ -22,6 +22,49 @@ const getRecentBoardsStorageKey = (username: string | null) =>
 const loadVisitedBoards = (username: string | null) =>
   JSON.parse(localStorage.getItem(getRecentBoardsStorageKey(username)) || "[]");
 
+const SESSION_KEY = "boardflow_user";
+const SESSION_ACTIVITY_KEY = "boardflow_session_activity";
+const SESSION_TIMEOUT_MS = 30 * 60 * 1000;
+
+const clearAuthSession = () => {
+  if (typeof window === "undefined") return;
+  window.sessionStorage.removeItem(SESSION_KEY);
+  window.sessionStorage.removeItem(SESSION_ACTIVITY_KEY);
+};
+
+const resetAuthSessionActivity = () => {
+  if (typeof window === "undefined") return;
+  window.sessionStorage.setItem(SESSION_ACTIVITY_KEY, Date.now().toString());
+};
+
+const isAuthSessionExpired = () => {
+  if (typeof window === "undefined") return false;
+
+  const lastActivity = Number(
+    window.sessionStorage.getItem(SESSION_ACTIVITY_KEY) || 0,
+  );
+
+  if (!lastActivity) return false;
+  return Date.now() - lastActivity > SESSION_TIMEOUT_MS;
+};
+
+const getStoredUsername = () => {
+  if (typeof window === "undefined") return null;
+
+  const username = window.sessionStorage.getItem(SESSION_KEY);
+  if (!username) return null;
+
+  if (isAuthSessionExpired()) {
+    clearAuthSession();
+    return null;
+  }
+
+  resetAuthSessionActivity();
+  return username;
+};
+
+const initialUsername = getStoredUsername();
+
 const getSocketUrl = () => {
   if (import.meta.env.VITE_SOCKET_URL) {
     return import.meta.env.VITE_SOCKET_URL;
@@ -140,7 +183,69 @@ interface CanvasState {
   syncElementPosition: (id: string) => void;
 }
 
-export const useCanvasStore = create<CanvasState>((set, get) => ({
+export const useCanvasStore = create<CanvasState>((set, get) => {
+  let sessionTimer: number | null = null;
+
+  const clearSessionTimer = () => {
+    if (sessionTimer !== null) {
+      window.clearTimeout(sessionTimer);
+      sessionTimer = null;
+    }
+  };
+
+  const scheduleSessionTimeout = () => {
+    clearSessionTimer();
+
+    if (typeof window === "undefined") return;
+    if (!get().username) return;
+
+    sessionTimer = window.setTimeout(() => {
+      if (get().username && isAuthSessionExpired()) {
+        get().logoutUser();
+      } else if (get().username) {
+        resetAuthSessionActivity();
+        scheduleSessionTimeout();
+      }
+    }, SESSION_TIMEOUT_MS);
+  };
+
+  const registerSessionActivity = () => {
+    resetAuthSessionActivity();
+    scheduleSessionTimeout();
+  };
+
+  if (typeof window !== "undefined") {
+    window.addEventListener("mousemove", registerSessionActivity, {
+      passive: true,
+    });
+    window.addEventListener("keydown", registerSessionActivity, {
+      passive: true,
+    });
+    window.addEventListener("click", registerSessionActivity, {
+      passive: true,
+    });
+    window.addEventListener("scroll", registerSessionActivity, {
+      passive: true,
+    });
+    window.addEventListener("touchstart", registerSessionActivity, {
+      passive: true,
+    });
+    window.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") {
+        if (get().username && isAuthSessionExpired()) {
+          get().logoutUser();
+        } else {
+          registerSessionActivity();
+        }
+      }
+    });
+
+    if (initialUsername) {
+      registerSessionActivity();
+    }
+  }
+
+  return {
   elements: [],
   remoteDrawingPreviews: {},
   remoteCursors: {},
@@ -156,9 +261,9 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   selectedElementId: null,
   historyStack: [],
   futureStack: [],
-  username: localStorage.getItem("boardflow_user"),
+  username: initialUsername,
   boardName: "Untitled Workspace",
-  visitedBoards: loadVisitedBoards(localStorage.getItem("boardflow_user")),
+  visitedBoards: loadVisitedBoards(initialUsername),
   activeUsersByBoard: {},
 
   syncElementPosition: (id) => {
@@ -195,13 +300,18 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   },
 
   setUsername: (name: string) => {
-    localStorage.setItem("boardflow_user", name);
+    if (typeof window !== "undefined") {
+      window.sessionStorage.setItem(SESSION_KEY, name);
+    }
+    resetAuthSessionActivity();
+    scheduleSessionTimeout();
     set({ username: name, visitedBoards: loadVisitedBoards(name) });
   },
 
   logoutUser: () => {
+    clearSessionTimer();
     get().disconnectPresenceSocket();
-    localStorage.removeItem("boardflow_user");
+    clearAuthSession();
     set({
       username: null,
       visitedBoards: [],
@@ -632,4 +742,5 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     localStorage.setItem(recentStorageKey, JSON.stringify(updatedList));
     set({ visitedBoards: updatedList });
   },
-}));
+  };
+});
